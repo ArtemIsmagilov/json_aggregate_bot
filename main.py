@@ -12,63 +12,62 @@ class EmptyJsonClientError(Exception):
 
 
 def json_response(dt_from, dt_upto, group_type):
-    client = MongoClient(MONGODB_URL)
+    with MongoClient(MONGODB_URL) as client:
+        mydb = client["dump"]
+        mycol = mydb["workers"]
 
-    mydb = client["dump"]
-    mycol = mydb["workers"]
+        first_date = datetime.datetime.fromisoformat(dt_from)
+        last_date = datetime.datetime.fromisoformat(dt_upto)
 
-    first_date = datetime.datetime.fromisoformat(dt_from)
-    last_date = datetime.datetime.fromisoformat(dt_upto)
+        aggr = mycol.aggregate([
+            {'$match':
+                 {'$and':
+                      [{'dt': {'$gte': first_date}}, {'dt': {'$lte': last_date}}, ], },
+             },
+            {'$project':
+                {
+                    "day_iso": {"$dateToString": {"format": "%Y-%m-%dT00:00:00", "date": "$dt"}},
+                    "month_iso": {"$dateToString": {"format": "%Y-%m-01T00:00:00", "date": "$dt"}},
+                    "hour_iso": {"$dateToString": {"format": "%Y-%m-%dT%H:00:00", "date": "$dt"}},
+                    "value": "$value",
+                }
+            },
+            {'$group':
+                {
+                    '_id': f"${group_type}_iso",
+                    'sum_value': {'$sum': "$value", }
+                }
+            },
+            {'$sort': {'_id': 1}}
 
-    aggr = mycol.aggregate([
-        {'$match':
-             {'$and':
-                  [{'dt': {'$gte': first_date}}, {'dt': {'$lte': last_date}}, ], },
-         },
-        {'$project':
-            {
-                "day_iso": {"$dateToString": {"format": "%Y-%m-%dT00:00:00", "date": "$dt"}},
-                "month_iso": {"$dateToString": {"format": "%Y-%m-01T00:00:00", "date": "$dt"}},
-                "hour_iso": {"$dateToString": {"format": "%Y-%m-%dT%H:00:00", "date": "$dt"}},
-                "value": "$value",
-            }
-        },
-        {'$group':
-            {
-                '_id': f"${group_type}_iso",
-                'sum_value': {'$sum': "$value", }
-            }
-        },
-        {'$sort': {'_id': 1}}
+        ])
 
-    ])
+        added_date = TYPE_GROUPS[group_type]
 
-    added_date = TYPE_GROUPS[group_type]
+        result = {"dataset": [], "labels": []}
 
-    result = {"dataset": [], "labels": []}
+        for a in aggr:
+            d = datetime.datetime.fromisoformat(a['_id'])
+            while first_date < d:
+                result["labels"].append(first_date.isoformat())
+                result["dataset"].append(0)
 
-    for a in aggr:
-        d = datetime.datetime.fromisoformat(a['_id'])
-        while first_date < d:
+                first_date += added_date
+
+            result["labels"].append(d.isoformat())
+            result["dataset"].append(a["sum_value"])
+
+            first_date += added_date
+
+        while first_date <= last_date:
             result["labels"].append(first_date.isoformat())
             result["dataset"].append(0)
 
             first_date += added_date
 
-        result["labels"].append(d.isoformat())
-        result["dataset"].append(a["sum_value"])
+        client.close()
 
-        first_date += added_date
-
-    while first_date <= last_date:
-        result["labels"].append(first_date.isoformat())
-        result["dataset"].append(0)
-
-        first_date += added_date
-
-    client.close()
-
-    return json.dumps(result)
+        return json.dumps(result)
 
 
 def validate_json(query):
